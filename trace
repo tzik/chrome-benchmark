@@ -1,0 +1,127 @@
+#!/bin/zsh
+
+set -ex
+
+if [ ! -f ".gn" ]; then
+  echo "Run this script in src/ dir"
+  exit 1
+fi
+
+systrace="$(dirname "$(which adb)")/systrace/systrace.py"
+
+# Uses chrome_public_apk.
+chrome="org.chromium.chrome"
+
+activity="com.google.android.apps.chrome.Main"
+url="${1:-http://www.google.com}"
+out_label="$(echo "${url}" | tr -c '[:alpha:][:digit:]' '_' )"
+out="${2:-../bulk_tracing/trace_${out_label}.html}"
+systrace_out="${3:-../bulk_tracing/systrace_${out_label}.html}"
+
+./build/android/adb_chrome_public_command_line --disable-fre --disable-translate
+adb shell "pm clear \"${chrome}\"; am start -a android.intent.action.VIEW -n \"${chrome}/${activity}\" -d \"${url}\""
+sleep 10s
+
+adb shell am force-stop "${chrome}"
+
+adb shell am start -a android.intent.action.VIEW -n "${chrome}/${activity}" -d "about:blank"
+sleep 3s
+
+adb shell input keyevent KEYCODE_BACK
+
+# adb shell "echo 3 > /proc/sys/vm/drop_caches"
+
+# Some device fail to write tracing result file, e.g. Android One without SD card.
+# Run "git cl patch 1374143002" and uncomment below for such devices.
+# adb shell "setenforce permissive; mkdir -p /data/tracing; chmod a+rwx /data/tracing"
+
+declare -T CATEGORIES categories ','
+declare -a categories
+categories+=(
+  "toplevel"
+  "benchmark"
+  "browser"
+  "blink" "-blink_gc" "blink_style" "blink.animations" "blink.net" "blink.user_timing"
+  "cc"
+  # "devtools.timeline"
+  "v8"
+  "renderer"
+
+  "content"
+  "event"
+  "input"
+  "gpu"
+  "loader"
+  "navigation"
+  "oobe"
+  "renderer_host"
+  "renderer.scheduler"
+  "sandbox_ipc"
+  "skia"
+
+  "startup" "shutdown" "trace_event_overhead"
+  "ipc"
+  "ui"
+
+  "views"
+  "WebCore"
+  "worker.scheduler"
+)
+
+non_default_categories+=(
+  # "ipc.flow"
+  # "toplevel.flow"
+
+  # "blink.debug"
+  # "blink.debug.layout"
+  # "blink.image_decoding"
+  # "blink.invalidation"
+  # "cb_command"
+  # "cc.debug"
+  # "cc.debug.cdp-perf"
+  # "cc.debug.display_items"
+  # "cc.debug.picture"
+  # "cc.debug.quads"
+  # "cc.debug.scheduler"
+  # "cc.debug.scheduler.frames"
+  # "cc.debug.scheduler.now"
+  # "devtools.timeline"
+  # "devtools.timeline.frame"
+  # "devtools.timeline.invalidationTracking"
+  # "devtools.timeline.layers"
+  # "devtools.timeline.picture"
+  # "file"
+  # "gpu_decoder"
+  # "gpu.debug"
+  # "gpu.device"
+  # "gpu.service"
+  # "memory"
+  # "memory-infra"
+  # "renderer.scheduler"
+  # "renderer.scheduler.debug"
+  # "skia"
+  # "system_stats"
+  # "v8.cpu_profile"
+  # "v8.cpu_profile.hires"
+  # "worker.scheduler"
+  # "worker.scheduler.debug"
+)
+
+for i in "${non_default_categories[@]}"; do
+  categories+=("disabled-by-default-${i}")
+done
+
+(sleep 10s; echo) | ./build/android/adb_profile_chrome --continuous --browser chromium --categories="${CATEGORIES}" --systrace freq,sched -o "${out}" --time 10 &
+
+# (sleep 10s; echo) | ./build/android/adb_profile_chrome --continuous --browser chromium -o "${out}" --systrace freq,sched --categories="_DEFAULT_CHORME_CATEGORIES,-blink_gc" --time 10 --trace-flow --view &
+
+sleep 3s
+
+# Turn on all CPU cores.
+# for i in {0..3}; do
+#   adb shell "echo 1 > /sys/devices/system/cpu/cpu$i/online"
+# done
+
+adb shell am start -a android.intent.action.VIEW -n "${chrome}/${activity}"
+
+wait
