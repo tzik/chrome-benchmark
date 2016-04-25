@@ -1,0 +1,43 @@
+#!/usr/bin/python3
+# -*- python -*-
+
+import json
+import sys
+
+# A tool to filter out specific slices that confuses flow analysis from
+# trace.json.
+#
+# Usage: ./filter_trace < trace.json > result.json
+
+trace = json.load(sys.stdin)
+
+# PIDs of Chrome renderers.
+renderers = []
+
+# (PID, TID)s that identifies the threads that are controlled by a scheduler.
+scheduled_threads = []
+
+for event in trace['traceEvents']:
+  if (event.get('cat') == '__metadata' and
+      event.get('name') == 'process_name' and
+      event['args']['name'] == 'Renderer'):
+    renderers.append(event['pid'])
+
+for event in trace['traceEvents']:
+  if (event.get('cat') == '__metadata' and
+      event.get('name') == 'thread_name' and
+      event.get('pid') in renderers and
+      event['args']['name'] in ('CrRendererMain', 'HTMLParserThread')):
+    scheduled_threads.append((event['pid'], event['tid']))
+
+# Remove toplevel slices that runs scheduler task.
+filtered_events = []
+for event in trace['traceEvents']:
+  if ((event.get('pid'), event.get('tid')) in scheduled_threads and
+      event.get('name') in ('MessageLoop::RunTask', 'MessageLoop::PostTask') and
+      event.get('flow_in')):
+    continue
+  filtered_events.append(event)
+
+trace['traceEvents'] = filtered_events
+json.dump(trace, sys.stdout)
